@@ -1,11 +1,13 @@
 {
   "search": "Search",
   "savedSearches": "Saved Searches",
+  "recentSearches": "Recent Searches",
   "searchFor": "Search for {{inputValue}}",
   "button": {
     "clear": "Clear search",
     "save": "Save search",
     "delete": "Delete saved search",
+    "removeRecentSearch": "Remove from recent searches",
     "filterInformation": "Filter information",
     "filterActive": "Filters active"
   },
