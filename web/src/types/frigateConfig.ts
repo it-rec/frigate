@@ -552,6 +552,7 @@ export interface FrigateConfig {
   lpr: {
     enabled: boolean;
     device?: string | null;
+    known_plates?: { [name: string]: string[] };
   };
 
   logger: {
