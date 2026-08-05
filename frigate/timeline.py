@@ -191,6 +191,12 @@ class TimelineProcessor(threading.Thread):
             timeline_entry[Timeline.class_type] = "gone"
             self.insert_or_save(timeline_entry, prev_event_data, event_data)
 
+            # the event has ended; if it was never saved (no clip and no
+            # snapshot) its buffered entries will never be flushed, so drop them
+            # here to keep pre_event_cache from growing without bound
+            if not event_data["has_clip"] and not event_data["has_snapshot"]:
+                self.pre_event_cache.pop(event_id, None)
+
     def handle_api_entry(
         self,
         camera: str,
