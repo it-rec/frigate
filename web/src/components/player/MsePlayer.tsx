@@ -90,6 +90,9 @@ function MSEPlayer({
   const mseCodecRef = useRef<string | null>(null);
   const mseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mseResponseReceivedRef = useRef<boolean>(false);
+  const disconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
 
   const wsURL = useMemo(() => {
     return `${baseUrl.replace(/^http/, "ws")}live/mse/api/ws?src=${camera}`;
@@ -732,10 +735,20 @@ function MSEPlayer({
         setBufferTimeout(undefined);
       }
 
-      setTimeout(() => {
-        if (!playbackEnabled) onDisconnect();
+      disconnectTimeoutRef.current = setTimeout(() => {
+        onDisconnect();
       }, 10000);
     }
+
+    // Clearing on cleanup covers both playbackEnabled flipping back to true
+    // (motion resumes within 10s) and unmount, so a reconnected stream is not
+    // torn down by a stale timer.
+    return () => {
+      if (disconnectTimeoutRef.current) {
+        clearTimeout(disconnectTimeoutRef.current);
+        disconnectTimeoutRef.current = null;
+      }
+    };
     // we know that these deps are correct
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playbackEnabled]);
