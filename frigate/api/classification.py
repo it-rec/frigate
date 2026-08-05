@@ -35,6 +35,7 @@ from frigate.config.classification import ObjectClassificationType
 from frigate.const import CLIPS_DIR, FACE_DIR, MODEL_CACHE_DIR
 from frigate.embeddings import EmbeddingsContext
 from frigate.models import Event
+from frigate.util.builtin import sanitized_subpath
 from frigate.util.classification import (
     collect_object_classification_examples,
     collect_state_classification_examples,
@@ -1243,10 +1244,20 @@ async def generate_object_examples(request: Request, body: GenerateObjectExample
     Returns a success message.""",
 )
 def delete_classification_model(request: Request, name: str):
-    sanitized_name = sanitize_filename(name)
+    # This endpoint intentionally does not validate name against the config,
+    # so the name must be contained explicitly. sanitize_filename alone leaves
+    # "." and ".." intact, which would let rmtree escape the base directory.
+    try:
+        data_dir = sanitized_subpath(CLIPS_DIR, name)
+        model_dir = sanitized_subpath(MODEL_CACHE_DIR, name)
+    except ValueError:
+        logger.warning("Rejected classification model delete for invalid name")
+        return JSONResponse(
+            content={"success": False, "message": "Invalid model name"},
+            status_code=400,
+        )
 
     # Delete the classification model's data directory in clips
-    data_dir = os.path.join(CLIPS_DIR, sanitized_name)
     if os.path.exists(data_dir):
         try:
             shutil.rmtree(data_dir)
@@ -1255,7 +1266,6 @@ def delete_classification_model(request: Request, name: str):
             logger.debug(f"Failed to delete data directory for {name}: {e}")
 
     # Delete the classification model's files in model_cache
-    model_dir = os.path.join(MODEL_CACHE_DIR, sanitized_name)
     if os.path.exists(model_dir):
         try:
             shutil.rmtree(model_dir)

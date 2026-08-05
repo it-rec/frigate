@@ -1,9 +1,36 @@
 """Tests for frigate.util.builtin helpers."""
 
+import os
 import unittest
 from unittest.mock import patch
 
-from frigate.util.builtin import EventsPerSecond
+from frigate.util.builtin import EventsPerSecond, sanitized_subpath
+
+
+class TestSanitizedSubpath(unittest.TestCase):
+    def test_normal_name_stays_within_base(self) -> None:
+        result = sanitized_subpath("/media/frigate/clips", "front_door")
+        self.assertEqual(result, os.path.join("/media/frigate/clips", "front_door"))
+
+    def test_multiple_parts(self) -> None:
+        result = sanitized_subpath("/base", "model", "dataset", "cat")
+        self.assertEqual(result, os.path.join("/base", "model", "dataset", "cat"))
+
+    def test_parent_traversal_is_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            sanitized_subpath("/media/frigate/clips", "..")
+
+    def test_current_dir_is_rejected(self) -> None:
+        # "." resolves to the base directory itself, which would let rmtree
+        # remove the base rather than a child.
+        with self.assertRaises(ValueError):
+            sanitized_subpath("/media/frigate/clips", ".")
+
+    def test_separators_are_stripped_not_traversed(self) -> None:
+        # sanitize_filename removes separators, so this collapses to a single
+        # (odd but contained) component rather than escaping the base.
+        result = sanitized_subpath("/base", "../../etc/passwd")
+        self.assertTrue(os.path.realpath(result).startswith(os.path.realpath("/base")))
 
 
 class TestEventsPerSecond(unittest.TestCase):

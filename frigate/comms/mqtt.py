@@ -224,6 +224,12 @@ class MqttClient(Communicator):
                     reason_code.getName(),
                 )
 
+            # The broker rejected the connection. Leave connected False so
+            # publish() correctly short-circuits instead of issuing state
+            # topics against a session that was never established.
+            self.connected = False
+            return
+
         self.connected = True
         logger.debug("MQTT connected")
         client.subscribe(f"{self.mqtt_config.topic_prefix}/#", qos=self.config.mqtt.qos)

@@ -225,14 +225,14 @@ async def latest_frame(
 
                 frame = request.app.camera_error_image
 
-        height = int(params.height or str(frame.shape[0]))
-        width = int(height * frame.shape[1] / frame.shape[0])
-
         if frame is None:
             return JSONResponse(
                 content={"success": False, "message": "Unable to get valid frame"},
                 status_code=500,
             )
+
+        height = int(params.height or str(frame.shape[0]))
+        width = int(height * frame.shape[1] / frame.shape[0])
 
         if height < 1 or width < 1:
             return JSONResponse(
@@ -263,10 +263,15 @@ async def latest_frame(
         and request.app.frigate_config.birdseye.enabled
         and request.app.frigate_config.birdseye.restream
     ):
-        frame = cv2.cvtColor(
-            frame_processor.get_current_frame(camera_name),
-            cv2.COLOR_YUV2BGR_I420,
-        )
+        birdseye_frame = frame_processor.get_current_frame(camera_name)
+
+        if birdseye_frame is None:
+            return JSONResponse(
+                content={"success": False, "message": "Birdseye frame not available"},
+                status_code=404,
+            )
+
+        frame = cv2.cvtColor(birdseye_frame, cv2.COLOR_YUV2BGR_I420)
 
         height = int(params.height or str(frame.shape[0]))
         width = int(height * frame.shape[1] / frame.shape[0])

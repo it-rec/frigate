@@ -5,6 +5,7 @@ import copy
 import logging
 import math
 import multiprocessing.queues
+import os
 import queue
 import re
 import shlex
@@ -18,6 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
+from pathvalidate import sanitize_filename
 from ruamel.yaml import YAML
 
 from frigate.const import REGEX_HTTP_CAMERA_USER_PASS, REGEX_RTSP_CAMERA_USER_PASS
@@ -26,6 +28,41 @@ if TYPE_CHECKING:
     from frigate.config import CameraConfig
 
 logger = logging.getLogger(__name__)
+
+
+def sanitized_subpath(base_dir: str, *parts: str) -> str:
+    """Join user-provided path parts under base_dir, guaranteeing containment.
+
+    Each part is passed through ``sanitize_filename`` (which strips path
+    separators) and the resolved result is verified to stay inside
+    ``base_dir``. ``pathvalidate.sanitize_filename`` does not strip ``.`` or
+    ``..`` on its own, so callers that build filesystem paths from request
+    input must go through this helper to avoid directory traversal.
+
+    Args:
+        base_dir: The trusted base directory the result must stay within.
+        parts: Untrusted path components supplied by the caller.
+
+    Returns:
+        The joined absolute-or-relative path, guaranteed to be contained
+        within base_dir.
+
+    Raises:
+        ValueError: If any part resolves to a location outside base_dir.
+    """
+    sanitized_parts = [sanitize_filename(str(part)) for part in parts]
+    candidate = os.path.join(base_dir, *sanitized_parts)
+
+    base_real = os.path.realpath(base_dir)
+    candidate_real = os.path.realpath(candidate)
+
+    # The result must be a strict child of base_dir. A candidate that resolves
+    # back to base_dir itself (e.g. every part sanitizing to "." or "") is just
+    # as dangerous as one that escapes, since callers rmtree/unlink the result.
+    if not candidate_real.startswith(base_real + os.sep):
+        raise ValueError(f"Path escapes base directory: {parts}")
+
+    return candidate
 
 
 class EventsPerSecond:
