@@ -2,8 +2,8 @@
 
 import logging
 import os
+import tempfile
 import threading
-import time
 from typing import Any
 
 from peewee import DoesNotExist
@@ -148,10 +148,14 @@ class AudioTranscriptionPostProcessor(PostProcessorApi):
             logger.debug("Recognizer not initialized")
             return None
 
-        try:  # type: ignore[unreachable]
-            # Save audio data to a temporary wav (faster-whisper expects a file)
-            temp_wav = os.path.join(CACHE_DIR, f"temp_audio_{int(time.time())}.wav")
-            with open(temp_wav, "wb") as f:
+        # Save audio data to a temporary wav (faster-whisper expects a file).
+        # A unique name avoids collisions between concurrent transcriptions, and
+        # the finally block guarantees cleanup even when transcribe() raises.
+        fd, temp_wav = tempfile.mkstemp(  # type: ignore[unreachable]
+            suffix=".wav", prefix="temp_audio_", dir=CACHE_DIR
+        )
+        try:
+            with os.fdopen(fd, "wb") as f:
                 f.write(audio_data)
 
             segments, info = self.recognizer.transcribe(
@@ -159,8 +163,6 @@ class AudioTranscriptionPostProcessor(PostProcessorApi):
                 language=self.config.audio_transcription.language,
                 beam_size=5,
             )
-
-            os.remove(temp_wav)
 
             # Combine all segment texts
             text = " ".join(segment.text.strip() for segment in segments)
@@ -177,6 +179,11 @@ class AudioTranscriptionPostProcessor(PostProcessorApi):
         except Exception as e:
             logger.error(f"Error transcribing audio: {e}")
             return None
+        finally:
+            try:
+                os.remove(temp_wav)
+            except OSError:
+                pass
 
     def _transcription_wrapper(self, event: dict[str, Any]) -> None:
         """Wrapper to run transcription and reset running flag when done."""

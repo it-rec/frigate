@@ -1511,13 +1511,19 @@ class LicensePlateProcessingMixin:
             plate_id = None
 
             for existing_id, data in self.detected_license_plates.items():
+                # Entries are created via setdefault before plate/last_seen are
+                # known, so read them defensively; a half-initialized entry from
+                # a filtered read must not raise KeyError here.
+                last_seen = data.get("last_seen")
                 if (
                     data["camera"] == camera
-                    and data["last_seen"] is not None
-                    and current_time - data["last_seen"]
+                    and last_seen is not None
+                    and current_time - last_seen
                     <= self.config.cameras[camera].lpr.expire_time
                 ):
-                    similarity = JaroWinkler.similarity(data["plate"], top_plate)
+                    similarity = JaroWinkler.similarity(
+                        data.get("plate", ""), top_plate
+                    )
                     if similarity >= self.similarity_threshold:
                         plate_id = existing_id
                         logger.debug(
@@ -1548,8 +1554,11 @@ class LicensePlateProcessingMixin:
             "timestamp": current_time,
         }
 
-        # Initialize or append to plates
-        self.detected_license_plates.setdefault(id, {"plates": [], "camera": camera})
+        # Initialize or append to plates. Seed last_seen/plate so the dedicated
+        # LPR matching loop and _expire_dedicated_lpr always find these keys.
+        self.detected_license_plates.setdefault(
+            id, {"plates": [], "camera": camera, "plate": "", "last_seen": None}
+        )
         self.detected_license_plates[id]["plates"].append(variant)
 
         # Prune old variants - this is probably higher than it needs to be
@@ -1576,6 +1585,10 @@ class LicensePlateProcessingMixin:
             logger.debug(
                 f"{camera}: Filtered out clustered plate '{rep_plate}' due to length ({len(rep_plate)} < {self.lpr_config.min_plate_length})"
             )
+            # Drop an entry created only by this filtered read so it is not left
+            # without last_seen (never matched, never evicted) forever.
+            if is_new:
+                self.detected_license_plates.pop(id, None)
             return
 
         if self.lpr_config.format:
@@ -1584,6 +1597,8 @@ class LicensePlateProcessingMixin:
                     logger.debug(
                         f"{camera}: Filtered out clustered plate '{rep_plate}' due to format mismatch"
                     )
+                    if is_new:
+                        self.detected_license_plates.pop(id, None)
                     return
             except re.error:
                 logger.error(

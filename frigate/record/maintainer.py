@@ -677,6 +677,10 @@ class RecordingMaintainer(threading.Thread):
 
                 os.remove(cache_path)
 
+                # segment moved successfully, drop its cached end time so the
+                # cache does not grow by one entry per kept segment forever
+                self.end_time_cache.pop(cache_path, None)
+
                 rand_id = "".join(
                     random.choices(string.ascii_lowercase + string.digits, k=6)
                 )
@@ -701,8 +705,11 @@ class RecordingMaintainer(threading.Thread):
             Path(cache_path).unlink(missing_ok=True)
             logger.error(e)
 
-        # clear end_time cache
-        self.end_time_cache.pop(cache_path, None)
+        # reached when the destination already existed (clock skew or a restart
+        # mid-move) or an exception was raised. Drop the leftover cache file so
+        # it is not re-listed and re-probed on every pass, and clear its cache
+        # entry.
+        self.drop_segment(cache_path)
         return None
 
     def run(self) -> None:
