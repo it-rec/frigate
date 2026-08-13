@@ -124,12 +124,26 @@ export default function WebRtcPlayer({
   }
 
   const connect = useCallback(
-    async (aPc: Promise<RTCPeerConnection | undefined>) => {
+    async (
+      aPc: Promise<RTCPeerConnection | undefined>,
+      signal: AbortSignal,
+    ) => {
       if (!aPc) {
         return;
       }
 
-      pcRef.current = await aPc;
+      const pc = await aPc;
+
+      // The effect cleanup may have run while PeerConnection() was resolving.
+      // If so, close what we just created instead of storing it in refs the
+      // cleanup already inspected, which would strand the peer connection and
+      // websocket.
+      if (signal.aborted) {
+        pc?.close();
+        return;
+      }
+
+      pcRef.current = pc;
       wsRef.current = new WebSocket(wsURL);
       const ws = wsRef.current;
 
@@ -179,12 +193,14 @@ export default function WebRtcPlayer({
       return;
     }
 
+    const controller = new AbortController();
     const aPc = PeerConnection(
       microphoneEnabled ? "video+audio+microphone" : "video+audio",
     );
-    connect(aPc);
+    connect(aPc, controller.signal);
 
     return () => {
+      controller.abort();
       if (wsRef.current) {
         wsRef.current.close();
         wsRef.current = null;
