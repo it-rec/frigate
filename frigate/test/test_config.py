@@ -128,6 +128,15 @@ class TestConfig(unittest.TestCase):
         }
         self.assertRaises(ValidationError, lambda: FrigateConfig(**config))
 
+    def test_invalid_record_expire_interval(self):
+        config = {
+            **self.minimal,
+            "record": {"enabled": True, "expire_interval": 0},
+        }
+        # expire_interval of 0 would make itertools.cycle(range(0)) empty and
+        # silently disable all recording cleanup, so it must fail validation.
+        self.assertRaises(ValidationError, lambda: FrigateConfig(**config))
+
     def test_inherit_tracked_objects(self):
         config = {
             "mqtt": {"host": "mqtt"},

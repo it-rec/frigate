@@ -42,7 +42,14 @@ class InterProcessCommunicator(Communicator):
 
                 try:
                     raw = self.socket.recv_json(flags=zmq.NOBLOCK)
+                except zmq.ZMQError:
+                    break
 
+                # A REP socket must send exactly one reply for every request it
+                # receives. If the dispatcher raises, we still have to reply or
+                # the waiting REQ side blocks forever in recv_json, deadlocking
+                # every producer that shares this socket.
+                try:
                     if isinstance(raw, list):
                         (topic, value) = raw
                         response = self._dispatcher(topic, value)
@@ -51,11 +58,12 @@ class InterProcessCommunicator(Communicator):
                             f"Received unexpected data type in ZMQ recv_json: {type(raw)}"
                         )
                         response = None
+                except Exception:
+                    logger.exception("Error handling inter-process request")
+                    response = None
 
-                    if response is not None:
-                        self.socket.send_json(response)
-                    else:
-                        self.socket.send_json([])
+                try:
+                    self.socket.send_json(response if response is not None else [])
                 except zmq.ZMQError:
                     break
 
