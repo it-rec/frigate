@@ -34,7 +34,7 @@ type EventSegmentProps = {
   dense: boolean;
 };
 
-export function EventSegment({
+function EventSegmentComponent({
   events,
   segmentTime,
   segmentDuration,
@@ -260,5 +260,10 @@ export function EventSegment({
     </div>
   );
 }
+
+// Memoized so scrolling the virtualized timeline, which re-renders the parent
+// on every frame, does not re-render every visible segment when its props are
+// unchanged.
+export const EventSegment = React.memo(EventSegmentComponent);
 
 export default EventSegment;
