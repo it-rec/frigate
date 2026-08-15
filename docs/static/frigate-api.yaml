@@ -1382,6 +1382,29 @@ paths:
       security:
         - frigateAdminAuth: []
       x-required-role: admin
+  /lpr/plates:
+    get:
+      tags:
+        - Classification
+      summary: Get recognized license plate summaries
+      description: |-
+        **Access:** Admin role required.
+
+        Returns a summary for each distinct recognized license plate:
+            the number of tracked objects, the cameras it was seen on, the most recent
+            tracked object, and the known plate name from the configuration when one
+            matches. Requires license plate recognition to be enabled in the
+            configuration.
+      operationId: get_license_plate_summaries_lpr_plates_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+      security:
+        - frigateAdminAuth: []
+      x-required-role: admin
   /reindex:
     put:
       tags:

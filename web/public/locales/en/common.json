@@ -261,6 +261,7 @@
     "uiPlayground": "UI Playground",
     "features": "Features",
     "faceLibrary": "Face Library",
+    "lprLibrary": "License Plate Library",
     "classification": "Classification",
     "chat": "Chat",
     "user": {

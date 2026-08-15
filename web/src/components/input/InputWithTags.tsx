@@ -10,6 +10,7 @@ import {
   LuFilter,
   LuChevronDown,
   LuChevronUp,
+  LuHistory,
   LuTrash2,
   LuStar,
   LuSearch,
@@ -55,6 +56,9 @@ import { MdImageSearch } from "react-icons/md";
 import { useTranslation } from "react-i18next";
 import { getTranslatedLabel } from "@/utils/i18n";
 import { CameraNameLabel, ZoneNameLabel } from "../camera/FriendlyNameLabel";
+
+const MAX_RECENT_SEARCHES = 8;
+const MAX_RECENT_SEARCHES_SHOWN = 5;
 
 type InputWithTagsProps = {
   inputFocused: boolean;
@@ -129,10 +133,11 @@ export default function InputWithTags({
   const inputRef = useRef<HTMLInputElement>(null);
   const commandRef = useRef<HTMLDivElement>(null);
 
-  // TODO: search history from browser storage
-
   const [searchHistory, setSearchHistory, searchHistoryLoaded] =
     useUserPersistence<SavedSearchQuery[]>("frigate-search-history");
+
+  const [recentSearches, setRecentSearches, recentSearchesLoaded] =
+    useUserPersistence<string[]>("frigate-recent-searches");
 
   const [isSaveDialogOpen, setIsSaveDialogOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
@@ -173,6 +178,49 @@ export default function InputWithTags({
     },
     [searchHistory, searchHistoryLoaded, setFilters, setSearch],
   );
+
+  const addRecentSearch = useCallback(
+    (value: string) => {
+      const trimmed = value.trim();
+      if (!trimmed || !recentSearchesLoaded) {
+        return;
+      }
+      setRecentSearches(
+        [
+          trimmed,
+          ...(recentSearches ?? []).filter(
+            (item) => item.toLowerCase() !== trimmed.toLowerCase(),
+          ),
+        ].slice(0, MAX_RECENT_SEARCHES),
+      );
+    },
+    [recentSearches, recentSearchesLoaded, setRecentSearches],
+  );
+
+  const removeRecentSearch = useCallback(
+    (value: string) => {
+      if (!recentSearchesLoaded) {
+        return;
+      }
+      setRecentSearches(
+        (recentSearches ?? []).filter((item) => item !== value),
+      );
+    },
+    [recentSearches, recentSearchesLoaded, setRecentSearches],
+  );
+
+  const filteredRecentSearches = useMemo(() => {
+    if (currentFilterType || !recentSearchesLoaded) {
+      return [];
+    }
+    const query = inputValue.trim().toLowerCase();
+    return (recentSearches ?? [])
+      .filter((item) => {
+        const lowered = item.toLowerCase();
+        return lowered !== query && (!query || lowered.startsWith(query));
+      })
+      .slice(0, MAX_RECENT_SEARCHES_SHOWN);
+  }, [recentSearches, recentSearchesLoaded, currentFilterType, inputValue]);
 
   const handleDeleteSearch = useCallback((name: string) => {
     setSearchToDelete(name);
@@ -631,11 +679,12 @@ export default function InputWithTags({
 
   const handleSearch = useCallback(
     (value: string) => {
+      addRecentSearch(value);
       setSearch(value);
       setInputFocused(false);
       inputRef?.current?.blur();
     },
-    [setSearch, setInputFocused],
+    [addRecentSearch, setSearch, setInputFocused],
   );
 
   const handleInputKeyDown = useCallback(
@@ -944,6 +993,41 @@ export default function InputWithTags({
                 ))}
               </CommandGroup>
             )}
+          {filteredRecentSearches.length > 0 && (
+            <CommandGroup heading={t("recentSearches")}>
+              {filteredRecentSearches.map((recentSearch) => (
+                <CommandItem
+                  key={recentSearch}
+                  className="flex cursor-pointer items-center justify-between"
+                  onSelect={() => handleSearch(recentSearch)}
+                >
+                  <span className="flex items-center">
+                    <LuHistory className="mr-2 h-4 w-4" />
+                    {recentSearch}
+                  </span>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          removeRecentSearch(recentSearch);
+                        }}
+                        className="focus:outline-none"
+                        aria-label={t("button.removeRecentSearch")}
+                      >
+                        <LuX className="h-4 w-4 text-secondary-foreground" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipPortal>
+                      <TooltipContent>
+                        {t("button.removeRecentSearch")}
+                      </TooltipContent>
+                    </TooltipPortal>
+                  </Tooltip>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          )}
           <CommandGroup
             heading={
               currentFilterType

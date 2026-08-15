@@ -68,6 +68,9 @@ class TrackedObjectProcessor(threading.Thread):
         self.tracked_objects_queue = tracked_objects_queue
         self.stop_event: MpEvent = stop_event
         self.camera_states: dict[str, CameraState] = {}
+        # camera states are added and removed at runtime by the processor
+        # thread while API threads read them, so guard the dict with a lock
+        self.camera_states_lock = threading.Lock()
         self.frame_manager = SharedMemoryFrameManager()
         self.last_motion_detected: dict[str, float] = {}
         self.ptz_autotracker_thread = ptz_autotracker_thread
@@ -236,7 +239,9 @@ class TrackedObjectProcessor(threading.Thread):
         camera_state.on("end", end)
         camera_state.on("snapshot", snapshot)
         camera_state.on("camera_activity", camera_activity)
-        self.camera_states[camera] = camera_state
+
+        with self.camera_states_lock:
+            self.camera_states[camera] = camera_state
 
     def should_save_snapshot(self, camera: str, obj: TrackedObject) -> bool:
         if obj.false_positive:
@@ -324,9 +329,22 @@ class TrackedObjectProcessor(threading.Thread):
                 # reset the last_motion so redundant `off` commands aren't sent
                 self.last_motion_detected[camera] = 0
 
+    def get_camera_state(self, camera: str) -> CameraState | None:
+        """Returns the state for a camera, or None if it does not exist."""
+        with self.camera_states_lock:
+            return self.camera_states.get(camera)
+
+    def get_camera_states(self) -> list[CameraState]:
+        """Returns a snapshot of the camera states that is safe to iterate."""
+        with self.camera_states_lock:
+            return list(self.camera_states.values())
+
     def get_best(self, camera: str, label: str) -> dict[str, Any]:
-        # TODO: need a lock here
-        camera_state = self.camera_states[camera]
+        camera_state = self.get_camera_state(camera)
+
+        if camera_state is None:
+            return {}
+
         if label in camera_state.best_objects:
             best_obj = camera_state.best_objects[label]
 
@@ -350,17 +368,21 @@ class TrackedObjectProcessor(threading.Thread):
                 (self.config.birdseye.height * 3 // 2, self.config.birdseye.width),
             )
 
-        if camera not in self.camera_states:
+        camera_state = self.get_camera_state(camera)
+
+        if camera_state is None:
             return None
 
-        return self.camera_states[camera].get_current_frame(draw_options)
+        return camera_state.get_current_frame(draw_options)
 
     def get_current_frame_time(self, camera: str) -> float:
         """Returns the latest frame time for a given camera."""
-        if camera not in self.camera_states:
+        camera_state = self.get_camera_state(camera)
+
+        if camera_state is None:
             return 0.0
 
-        return self.camera_states[camera].current_frame_time
+        return camera_state.current_frame_time
 
     def set_sub_label(
         self, event_id: str, sub_label: str | None, score: float | None
@@ -699,7 +721,10 @@ class TrackedObjectProcessor(threading.Thread):
                         continue
 
                     camera_state.shutdown()
-                    self.camera_states.pop(camera)
+
+                    with self.camera_states_lock:
+                        self.camera_states.pop(camera)
+
                     self.camera_activity.pop(camera, None)
                     self.last_motion_detected.pop(camera, None)
 
@@ -812,7 +837,11 @@ class TrackedObjectProcessor(threading.Thread):
                     break
 
                 event_id, camera, _ = update
-                self.camera_states[camera].finished(event_id)
+                camera_state = self.camera_states.get(camera)
+
+                # the camera may have been removed before the event finished
+                if camera_state is not None:
+                    camera_state.finished(event_id)
 
         # shut down camera states
         for state in self.camera_states.values():

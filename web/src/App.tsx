@@ -25,6 +25,7 @@ const System = lazy(() => import("@/pages/System"));
 const Settings = lazy(() => import("@/pages/Settings"));
 const UIPlayground = lazy(() => import("@/pages/UIPlayground"));
 const FaceLibrary = lazy(() => import("@/pages/FaceLibrary"));
+const LprLibrary = lazy(() => import("@/pages/LprLibrary"));
 const Classification = lazy(() => import("@/pages/ClassificationModel"));
 const Chat = lazy(() => import("@/pages/Chat"));
 const Logs = lazy(() => import("@/pages/Logs"));
@@ -102,6 +103,7 @@ function DefaultAppView() {
               <Route path="/config" element={<ConfigEditor />} />
               <Route path="/logs" element={<Logs />} />
               <Route path="/faces" element={<FaceLibrary />} />
+              <Route path="/lpr" element={<LprLibrary />} />
               <Route path="/classification" element={<Classification />} />
               <Route path="/chat" element={<Chat />} />
               <Route path="/playground" element={<UIPlayground />} />{" "}
