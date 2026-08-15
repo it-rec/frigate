@@ -7,7 +7,6 @@ from typing import Any
 from cryptography.hazmat.primitives import serialization
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
-from peewee import DoesNotExist
 from py_vapid import Vapid01, utils
 
 from frigate.api.auth import allow_any_authenticated
@@ -56,10 +55,16 @@ def get_vapid_pub_key(request: Request):
     """,
 )
 def register_notifications(request: Request, body: dict = None):
-    if request.app.frigate_config.auth.enabled:
-        # FIXME: For FastAPI the remote-user is not being populated
-        username = request.headers.get("remote-user") or "admin"
-    else:
+    # the remote-user header is set by the auth flow for authenticated users;
+    # internal (port 5000) requests are anonymous and requests made with auth
+    # disabled have no real user, so both are attributed to the admin user
+    username = request.headers.get("remote-user")
+
+    if (
+        not request.app.frigate_config.auth.enabled
+        or not username
+        or username == "anonymous"
+    ):
         username = "admin"
 
     json: dict[str, Any] = body or {}
@@ -71,16 +76,21 @@ def register_notifications(request: Request, body: dict = None):
             status_code=400,
         )
 
-    try:
-        User.update(notification_tokens=User.notification_tokens.append(sub)).where(
-            User.username == username
-        ).execute()
-        return JSONResponse(
-            content=({"success": True, "message": "Successfully saved token."}),
-            status_code=200,
-        )
-    except DoesNotExist:
+    # update() returns the number of affected rows and never raises
+    # DoesNotExist, so a missing user must be detected via the row count
+    updated = (
+        User.update(notification_tokens=User.notification_tokens.append(sub))
+        .where(User.username == username)
+        .execute()
+    )
+
+    if updated == 0:
         return JSONResponse(
             content=({"success": False, "message": "Could not find user."}),
             status_code=404,
         )
+
+    return JSONResponse(
+        content=({"success": True, "message": "Successfully saved token."}),
+        status_code=200,
+    )
