@@ -4,6 +4,7 @@ import datetime
 import logging
 import os
 import random
+import re
 import shutil
 import string
 from typing import Any
@@ -11,10 +12,11 @@ from typing import Any
 import cv2
 from fastapi import APIRouter, Depends, Request, UploadFile
 from fastapi.responses import JSONResponse
-from peewee import DoesNotExist
+from peewee import SQL, DoesNotExist
 from playhouse.shortcuts import model_to_dict
+from rapidfuzz.distance import Levenshtein
 
-from frigate.api.auth import require_role
+from frigate.api.auth import get_allowed_cameras_for_filter, require_role
 from frigate.api.defs.request.classification_body import (
     AudioTranscriptionBody,
     DeleteFaceImagesBody,
@@ -30,7 +32,10 @@ from frigate.api.defs.response.generic_response import GenericResponse
 from frigate.api.defs.tags import Tags
 from frigate.config import FrigateConfig
 from frigate.config.camera import DetectConfig
-from frigate.config.classification import ObjectClassificationType
+from frigate.config.classification import (
+    LicensePlateRecognitionConfig,
+    ObjectClassificationType,
+)
 from frigate.const import CLIPS_DIR, FACE_DIR, MODEL_CACHE_DIR
 from frigate.embeddings import EmbeddingsContext
 from frigate.models import Event
@@ -547,6 +552,111 @@ def reprocess_license_plate(request: Request, event_id: str):
         content=response,
         status_code=200,
     )
+
+
+def get_known_plate_name(
+    lpr_config: LicensePlateRecognitionConfig, plate: str
+) -> str | None:
+    """Return the configured known plate name matching a recognized plate.
+
+    Mirrors the matching used during recognition: regex match against each
+    configured plate pattern, or a Levenshtein distance within the
+    configured match_distance.
+    """
+    try:
+        return next(
+            (
+                label
+                for label, plates_list in (lpr_config.known_plates or {}).items()
+                if any(
+                    re.match(f"^{known_plate}$", plate)
+                    or Levenshtein.distance(known_plate, plate)
+                    <= lpr_config.match_distance
+                    for known_plate in plates_list
+                )
+            ),
+            None,
+        )
+    except re.error:
+        logger.error("Invalid regex in known plates configuration")
+        return None
+
+
+@router.get(
+    "/lpr/plates",
+    dependencies=[Depends(require_role(["admin"]))],
+    summary="Get recognized license plate summaries",
+    description="""Returns a summary for each distinct recognized license plate:
+    the number of tracked objects, the cameras it was seen on, the most recent
+    tracked object, and the known plate name from the configuration when one
+    matches. Requires license plate recognition to be enabled in the
+    configuration.""",
+)
+def get_license_plate_summaries(
+    request: Request,
+    allowed_cameras: list[str] = Depends(get_allowed_cameras_for_filter),
+):
+    if not request.app.frigate_config.lpr.enabled:
+        return JSONResponse(
+            content=(
+                {
+                    "success": False,
+                    "message": "License plate recognition is not enabled.",
+                }
+            ),
+            status_code=400,
+        )
+
+    lpr_config = request.app.frigate_config.lpr
+
+    query = (
+        Event.select(
+            Event.id,
+            Event.camera,
+            Event.start_time,
+            SQL("json_extract(data, '$.recognized_license_plate') AS plate"),
+            SQL("json_extract(data, '$.recognized_license_plate_score') AS score"),
+        )
+        .where(
+            (SQL("json_extract(data, '$.recognized_license_plate') IS NOT NULL"))
+            & (Event.camera << allowed_cameras)
+        )
+        .order_by(Event.start_time.desc())
+    )
+
+    summaries: dict[str, dict[str, Any]] = {}
+
+    for event_id, camera, start_time, plate, score in query.tuples():
+        if not plate:
+            continue
+
+        summary = summaries.get(plate)
+
+        # events are ordered newest first, so the first occurrence of a
+        # plate is also its most recent tracked object
+        if summary is None:
+            summary = {
+                "plate": plate,
+                "known_name": get_known_plate_name(lpr_config, plate),
+                "count": 0,
+                "cameras": [],
+                "latest_event_id": event_id,
+                "latest_time": start_time,
+                "best_score": None,
+            }
+            summaries[plate] = summary
+
+        summary["count"] += 1
+
+        if camera not in summary["cameras"]:
+            summary["cameras"].append(camera)
+
+        if score is not None and (
+            summary["best_score"] is None or score > summary["best_score"]
+        ):
+            summary["best_score"] = score
+
+    return JSONResponse(content=list(summaries.values()))
 
 
 @router.put(

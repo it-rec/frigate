@@ -1,0 +1,43 @@
+{
+  "documentTitle": "License Plate Library - Frigate",
+  "title": "License Plate Library",
+  "lprDisabled": "License plate recognition is not enabled in the configuration.",
+  "search": {
+    "placeholder": "Search plates"
+  },
+  "sort": {
+    "lastSeen": "Last seen",
+    "count": "Most seen",
+    "plate": "Plate"
+  },
+  "noPlates": "No license plates have been recognized yet.",
+  "noMatchingPlates": "No plates match your search.",
+  "unknownPlate": "Unknown plate",
+  "plateActions": "Plate actions",
+  "assignKnownName": "Assign known name",
+  "changeKnownName": "Change known name",
+  "removeKnownName": "Remove known name",
+  "viewTrackedObjects": "View tracked objects",
+  "trackedObjects_one": "{{count}} tracked object",
+  "trackedObjects_other": "{{count}} tracked objects",
+  "topScore": "Top score {{score}}%",
+  "lastSeen": "Last seen {{time}}",
+  "assignDialog": {
+    "title": "Assign known plate name",
+    "desc": "Assign a name to the plate {{plate}}. The name is saved to known_plates in the configuration and applied to newly recognized plates."
+  },
+  "description": {
+    "invalidName": "Invalid name. Names can only include letters, numbers, spaces, apostrophes, underscores, and hyphens."
+  },
+  "toast": {
+    "success": {
+      "updatedKnownPlates": "Successfully updated known plates."
+    },
+    "error": {
+      "updateKnownPlatesFailed": "Failed to update known plates: {{errorMessage}}"
+    },
+    "info": {
+      "patternMatchedPlate": "This plate is matched by a pattern or match distance in the known plates configuration, so it must be edited in the settings."
+    }
+  }
+}

@@ -5,7 +5,7 @@ import { useMemo } from "react";
 import { isDesktop } from "react-device-detect";
 import { FaCompactDisc, FaVideo } from "react-icons/fa";
 import { IoSearch } from "react-icons/io5";
-import { LuConstruction } from "react-icons/lu";
+import { LuCar, LuConstruction } from "react-icons/lu";
 import { MdCategory, MdChat, MdVideoLibrary } from "react-icons/md";
 import { TbFaceId } from "react-icons/tb";
 import useSWR from "swr";
@@ -19,6 +19,7 @@ export const ID_PLAYGROUND = 5;
 export const ID_FACE_LIBRARY = 6;
 export const ID_CLASSIFICATION = 7;
 export const ID_CHAT = 8;
+export const ID_LPR_LIBRARY = 9;
 
 export default function useNavigation(
   variant: "primary" | "secondary" = "primary",
@@ -84,6 +85,14 @@ export default function useNavigation(
           enabled: isDesktop && config?.face_recognition.enabled && isAdmin,
         },
         {
+          id: ID_LPR_LIBRARY,
+          variant,
+          icon: LuCar,
+          title: "menu.lprLibrary",
+          url: "/lpr",
+          enabled: isDesktop && config?.lpr?.enabled && isAdmin,
+        },
+        {
           id: ID_CLASSIFICATION,
           variant,
           icon: MdCategory,
@@ -100,6 +109,12 @@ export default function useNavigation(
           enabled: isDesktop && isAdmin && hasChatAgent,
         },
       ] as NavData[],
-    [config?.face_recognition?.enabled, hasChatAgent, variant, isAdmin],
+    [
+      config?.face_recognition?.enabled,
+      config?.lpr?.enabled,
+      hasChatAgent,
+      variant,
+      isAdmin,
+    ],
   );
 }
