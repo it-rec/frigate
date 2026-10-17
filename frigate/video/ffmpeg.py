@@ -310,6 +310,34 @@ class CameraWatchdog(threading.Thread):
         self._check_config_updates()
         return self.config.enabled
 
+    def _record_reconnect(self, now: float) -> None:
+        """Count an ffmpeg restart in the reconnects of the last hour."""
+        self.reconnect_timestamps.append(now)
+        while self.reconnect_timestamps and self.reconnect_timestamps[0] < now - 3600:
+            self.reconnect_timestamps.popleft()
+        if self.reconnects:
+            self.reconnects.value = len(self.reconnect_timestamps)
+
+    def _restart_exited_process(self, p: dict[str, Any], now: float) -> None:
+        """Restart an exited ffmpeg process, at most once per retry interval."""
+        # ffmpeg exits right away while its input is unreachable, so restarting
+        # on every tick would hammer the source. a process that ran for at least
+        # the retry interval is restarted immediately.
+        # report the exit right away, but only once per exit
+        if not p.get("exit_reported"):
+            self._send_roles_offline(p["roles"], now)
+            p["exit_reported"] = True
+
+        if now - p["start_time"] < self.sleeptime:
+            return
+
+        p["process"] = start_or_restart_ffmpeg(
+            p["cmd"], self.logger, p["logpipe"], ffmpeg_process=p["process"]
+        )
+        p["start_time"] = now
+        p["exit_reported"] = False
+        self._record_reconnect(now)
+
     def reset_capture_thread(self, terminate: bool = True) -> None:
         if terminate:
             # The capture thread keeps draining stdout, so wait() is enough here.
@@ -325,13 +353,7 @@ class CameraWatchdog(threading.Thread):
 
                 self.ffmpeg_detect_process.wait()
 
-        # Update reconnects
-        now = datetime.now().timestamp()
-        self.reconnect_timestamps.append(now)
-        while self.reconnect_timestamps and self.reconnect_timestamps[0] < now - 3600:
-            self.reconnect_timestamps.popleft()
-        if self.reconnects:
-            self.reconnects.value = len(self.reconnect_timestamps)
+        self._record_reconnect(datetime.now().timestamp())
 
         # Wait for old capture thread to fully exit before starting a new one
         if self.capture_thread is not None and self.capture_thread.is_alive():
@@ -537,6 +559,7 @@ class CameraWatchdog(threading.Thread):
                             p["logpipe"],
                             ffmpeg_process=p["process"],
                         )
+                        p["start_time"] = now
 
                         self._send_roles_offline(p["roles"], now)
 
@@ -557,11 +580,7 @@ class CameraWatchdog(threading.Thread):
                 if poll is None:
                     continue
 
-                self._send_roles_offline(p["roles"], now)
-
-                p["process"] = start_or_restart_ffmpeg(
-                    p["cmd"], self.logger, p["logpipe"], ffmpeg_process=p["process"]
-                )
+                self._restart_exited_process(p, now)
 
             if self.detect_process_records_sub and self.config.record.stream_enabled(
                 STREAM_TYPE_SUB
@@ -660,6 +679,7 @@ class CameraWatchdog(threading.Thread):
                     "roles": c["roles"],
                     "logpipe": logpipe,
                     "process": start_or_restart_ffmpeg(c["cmd"], self.logger, logpipe),
+                    "start_time": datetime.now().timestamp(),
                 }
             )
 
