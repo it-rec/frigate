@@ -87,8 +87,9 @@ class ImprovedMotionDetector(MotionDetector):
         # Improve contrast
         if self.config.improve_contrast:
             # TODO tracking moving average of min/max to avoid sudden contrast changes
-            min_value = np.percentile(resized_frame, 4).astype(np.uint8)
-            max_value = np.percentile(resized_frame, 96).astype(np.uint8)
+            min_value, max_value = np.percentile(resized_frame, [4, 96]).astype(
+                np.uint8
+            )
             # skip contrast calcs if the image is a single color
             if min_value < max_value:
                 # keep track of the last 50 contrast values
@@ -102,10 +103,15 @@ class ImprovedMotionDetector(MotionDetector):
 
                 avg_min, avg_max = np.mean(self.contrast_values, axis=0)
 
-                resized_frame = np.clip(resized_frame, avg_min, avg_max)
-                resized_frame = (
-                    ((resized_frame - avg_min) / (avg_max - avg_min)) * 255
+                # Apply the clip-and-rescale as a 256-entry uint8 lookup table
+                # instead of promoting the whole frame to float64 (which
+                # allocated several full-frame temporaries per frame). The
+                # per-pixel result is identical since the input is uint8.
+                levels = np.clip(np.arange(256, dtype=np.float64), avg_min, avg_max)
+                contrast_lut = (
+                    ((levels - avg_min) / (avg_max - avg_min)) * 255
                 ).astype(np.uint8)
+                resized_frame = cv2.LUT(resized_frame, contrast_lut)
 
         if self.save_images:
             contrasted_saved = resized_frame.copy()
