@@ -204,6 +204,9 @@ class RecordingMaintainer(threading.Thread):
         # last known capture end per (camera, stream_type); 0.0 marks a key
         # whose DB seed found no rows
         self.last_segment_end: dict[tuple[str, str], float] = {}
+        # cache paths per (camera, stream_type) that detection had already
+        # processed in the previous move_files pass
+        self.previously_processed_segments: dict[tuple[str, str], set[str]] = {}
         self.unexpected_cache_files_logged: bool = False
 
     def _get_last_segment_end(self, camera: str, stream_type: str) -> float | None:
@@ -387,6 +390,7 @@ class RecordingMaintainer(threading.Thread):
 
         # delete all cached files past the most recent MAX_SEGMENTS_IN_CACHE
         keep_count = MAX_SEGMENTS_IN_CACHE
+        processed_segments: dict[tuple[str, str], set[str]] = {}
         for key in grouped_recordings.keys():
             camera, stream_type = key
 
@@ -400,20 +404,22 @@ class RecordingMaintainer(threading.Thread):
                 camera_info[-1][0] if len(camera_info) > 0 else 0
             )
 
-            processed_segment_count = len(
-                list(
-                    filter(
-                        lambda r: (
-                            r["start_time"].timestamp()
-                            < most_recently_processed_frame_time
-                        ),
-                        grouped_recordings[key],
-                    )
-                )
+            processed_paths = {
+                r["cache_path"]
+                for r in grouped_recordings[key]
+                if r["start_time"].timestamp() < most_recently_processed_frame_time
+            }
+            processed_segment_count = len(processed_paths)
+
+            # only count segments the mover already had a pass to handle, when
+            # the detect stream recovers from a stall the frame time jumps and
+            # every segment cached during the stall becomes processed at once
+            stuck_segment_count = len(
+                processed_paths & self.previously_processed_segments.get(key, set())
             )
 
             # see if the recording mover is too slow and segments need to be deleted
-            if processed_segment_count > keep_count:
+            if stuck_segment_count > keep_count:
                 logger.warning(
                     f"Unable to keep up with recording segments in cache for {camera}. Keeping the {keep_count} most recent segments out of {processed_segment_count} and discarding the rest..."
                 )
@@ -438,6 +444,12 @@ class RecordingMaintainer(threading.Thread):
                     Path(cache_path).unlink(missing_ok=True)
                     self.end_time_cache.pop(cache_path, None)
                 grouped_recordings[key] = grouped_recordings[key][-keep_count:]
+
+            processed_segments[key] = processed_paths & {
+                r["cache_path"] for r in grouped_recordings[key]
+            }
+
+        self.previously_processed_segments = processed_segments
 
         # frame stats are shared per camera across stream types, so trimming
         # to one stream's oldest cache would pop frames the other still needs
