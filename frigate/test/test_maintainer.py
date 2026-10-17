@@ -17,6 +17,7 @@ for name in _MOCKED_MODULES:
 
 # Now import the class under test
 from frigate.config import FrigateConfig, RetainModeEnum  # noqa: E402
+from frigate.const import CACHE_SEGMENT_FORMAT  # noqa: E402
 from frigate.record.maintainer import RecordingMaintainer  # noqa: E402
 
 # Restore original modules (or remove mock if there was no original)
@@ -25,6 +26,10 @@ for name, orig in _originals.items():
         sys.modules.pop(name, None)
     else:
         sys.modules[name] = orig
+
+
+def _cache_name(start: datetime.datetime) -> str:
+    return f"test_cam@{start.strftime(CACHE_SEGMENT_FORMAT)}.mp4"
 
 
 class TestMaintainer(unittest.IsolatedAsyncioTestCase):
@@ -197,6 +202,86 @@ class TestMaintainer(unittest.IsolatedAsyncioTestCase):
 
         maintainer.drop_segment.assert_not_called()
         maintainer.move_segment.assert_awaited_once()
+
+    def _build_cache_maintainer(self) -> RecordingMaintainer:
+        config = MagicMock(spec=FrigateConfig)
+        camera_config = MagicMock()
+        camera_config.record.enabled = True
+        camera_config.record.sub.enabled = False
+        config.cameras = {"test_cam": camera_config}
+
+        maintainer = RecordingMaintainer(config, MagicMock())
+        # nothing gets moved, so every segment stays in cache between passes
+        maintainer.validate_and_move_segment = AsyncMock(return_value=None)
+        maintainer.requestor = MagicMock()
+        maintainer.recordings_publisher = MagicMock()
+        return maintainer
+
+    async def _run_move_files(
+        self, maintainer: RecordingMaintainer, starts: list[datetime.datetime]
+    ) -> tuple[list[str], MagicMock]:
+        """Run one move_files pass over the given segments, return removed files."""
+        files = [_cache_name(start) for start in starts]
+        removed: list[str] = []
+
+        with (
+            patch("os.listdir", return_value=files),
+            patch("os.path.isfile", return_value=True),
+            patch("frigate.record.maintainer.psutil.process_iter", return_value=[]),
+            patch(
+                "frigate.record.maintainer.Path.unlink",
+                autospec=True,
+                side_effect=lambda path, missing_ok=False: removed.append(path.name),
+            ),
+            patch("frigate.record.maintainer.logger.warning") as warn,
+        ):
+            await maintainer.move_files()
+
+        return removed, warn
+
+    async def test_segments_processed_after_detect_stall_are_not_trimmed(self):
+        # Regression: while the detect stream stalls, the frame time freezes
+        # and segments pile up as unprocessed. When frames resume, all of them
+        # become processed in the same pass, which must not be mistaken for a
+        # mover that can't keep up and discard footage before it was handled.
+        maintainer = self._build_cache_maintainer()
+
+        now = datetime.datetime.now(datetime.UTC).replace(microsecond=0)
+        starts = [now - datetime.timedelta(seconds=10 * i) for i in range(7, 0, -1)]
+
+        # detect stalled before the first segment started
+        maintainer.object_recordings_info["test_cam"] = [
+            (starts[0].timestamp() - 5, [], [], [])
+        ]
+        removed, warn = await self._run_move_files(maintainer, starts[:-1])
+        self.assertEqual(removed, [])
+        warn.assert_not_called()
+
+        # detect recovers and every cached segment is processed at once
+        maintainer.object_recordings_info["test_cam"].append(
+            (now.timestamp(), [], [], [])
+        )
+        removed, warn = await self._run_move_files(maintainer, starts)
+        self.assertEqual(removed, [])
+        warn.assert_not_called()
+
+    async def test_processed_segments_stuck_in_cache_are_trimmed(self):
+        maintainer = self._build_cache_maintainer()
+
+        now = datetime.datetime.now(datetime.UTC).replace(microsecond=0)
+        starts = [now - datetime.timedelta(seconds=10 * i) for i in range(7, 0, -1)]
+        maintainer.object_recordings_info["test_cam"] = [(now.timestamp(), [], [], [])]
+
+        # the mover gets one pass to handle the processed segments
+        removed, warn = await self._run_move_files(maintainer, starts)
+        self.assertEqual(removed, [])
+        warn.assert_not_called()
+
+        # they are still in cache on the next pass, so the oldest is discarded
+        removed, warn = await self._run_move_files(maintainer, starts)
+        self.assertEqual(removed, [_cache_name(starts[0])])
+        warn.assert_called_once()
+        self.assertIn("Unable to keep up", warn.call_args.args[0])
 
     async def test_expire_stale_recordings_info_drops_only_absent_cameras(self):
         config = MagicMock(spec=FrigateConfig)
