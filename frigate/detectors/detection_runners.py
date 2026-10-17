@@ -10,6 +10,7 @@ from typing import Any
 import numpy as np
 import onnxruntime as ort
 
+from frigate.const import MODEL_CACHE_DIR
 from frigate.util.model import get_ort_providers
 from frigate.util.rknn_converter import auto_convert_model, is_rknn_compatible
 
@@ -336,6 +337,15 @@ class OpenVINOModelRunner(BaseModelRunner):
                 self.ov_core.set_property(device, {"NPU_TURBO": "YES"})
             except Exception as e:
                 logger.debug(f"NPU_TURBO not supported by driver: {e}")
+
+        if device in ["GPU", "AUTO", "NPU"]:
+            # Cache compiled models so restarts skip rebuilding GPU/NPU kernels
+            try:
+                cache_dir = os.path.join(MODEL_CACHE_DIR, "openvino/ov")
+                os.makedirs(cache_dir, exist_ok=True)
+                self.ov_core.set_property({"CACHE_DIR": cache_dir})
+            except Exception as e:
+                logger.debug(f"OpenVINO model cache not enabled: {e}")
 
         # Compile model under the shared lock
         with _OPENVINO_LOCK:
