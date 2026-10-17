@@ -186,13 +186,16 @@ class ReviewDescriptionProcessor(PostProcessorApi):
                 buffer_extension = get_recording_buffer_extension(
                     final_data["end_time"] - final_data["start_time"]
                 )
-                final_data["start_time"] -= buffer_extension
-                final_data["end_time"] += buffer_extension
+                # Buffer the window used for frame extraction only. final_data is
+                # the review payload passed on to the analysis, so mutating its
+                # start/end here would widen the review timestamps and duration.
+                clip_start = final_data["start_time"] - buffer_extension
+                clip_end = final_data["end_time"] + buffer_extension
 
                 frames = self.get_recording_frames(
                     camera,
-                    final_data["start_time"],
-                    final_data["end_time"],
+                    clip_start,
+                    clip_end,
                     height=480,  # Use 480p for good balance between quality and token usage
                     frame_mode=frame_mode,
                 )
@@ -204,8 +207,8 @@ class ReviewDescriptionProcessor(PostProcessorApi):
                     )
                     frames = self.get_preview_frames_as_bytes(
                         camera,
-                        final_data["start_time"],
-                        final_data["end_time"],
+                        clip_start,
+                        clip_end,
                         final_data["thumb_path"],
                         id,
                         camera_config.review.genai.debug_save_thumbnails,

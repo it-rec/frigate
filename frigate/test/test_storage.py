@@ -567,6 +567,31 @@ class TestHttp(unittest.TestCase):
 
         self.assertTrue(storage.retention_unmet)
 
+    def test_storage_cleanup_removes_orphan_rows(self):
+        """Rows whose file is already gone are deleted instead of re-scanned."""
+        config = FrigateConfig(**self.minimal_config)
+        storage = StorageMaintainer(config, MagicMock())
+
+        time_delete = datetime.datetime.now().timestamp() - 7200
+        orphan_id = "123456.orphan"
+        orphan_path = os.path.join(self.test_dir, f"{orphan_id}.tmp")
+        _insert_mock_recording(orphan_id, orphan_path, time_delete, time_delete + 10)
+        os.remove(orphan_path)
+
+        rec_id = "123457.delete"
+        _insert_mock_recording(
+            rec_id,
+            os.path.join(self.test_dir, f"{rec_id}.tmp"),
+            time_delete + 10,
+            time_delete + 20,
+        )
+
+        with patch.object(storage, "expected_hourly_bandwidth", return_value=100.0):
+            storage.reduce_storage_consumption()
+
+        self.assertIsNone(Recordings.get_or_none(Recordings.id == orphan_id))
+        self.assertIsNone(Recordings.get_or_none(Recordings.id == rec_id))
+
     def test_clean_run_clears_the_live_flag(self):
         config = FrigateConfig(**self.minimal_config)
         storage = StorageMaintainer(config, MagicMock())

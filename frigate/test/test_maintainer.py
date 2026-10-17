@@ -1,5 +1,7 @@
 import datetime
+import os
 import sys
+import tempfile
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -238,6 +240,97 @@ class TestMaintainer(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             maintainer.audio_recordings_info["absent_cam"], [(recent, 0, [])]
         )
+
+
+class TestMoveSegmentCleanup(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.cache_dir = os.path.join(self.tmp.name, "cache")
+        self.record_dir = os.path.join(self.tmp.name, "recordings")
+        os.makedirs(self.cache_dir)
+        os.makedirs(self.record_dir)
+
+        self.cache_path = os.path.join(
+            self.cache_dir, "test_cam@20260417150000+0000.mp4"
+        )
+        with open(self.cache_path, "wb") as f:
+            f.write(b"\0" * 16)
+
+        config = MagicMock(spec=FrigateConfig)
+        config.cameras = {}
+        config.ffmpeg = MagicMock()
+        self.maintainer = RecordingMaintainer(config, MagicMock())
+
+        self.end_time = datetime.datetime(2026, 4, 17, 15, 0, 10, tzinfo=datetime.UTC)
+        self.start_time = self.end_time - datetime.timedelta(seconds=10)
+        self.maintainer.end_time_cache = {
+            self.cache_path: (self.end_time, 10.0, None, None, None, None, None)
+        }
+
+        self.patches = [
+            patch("frigate.record.maintainer.RECORD_DIR", self.record_dir),
+            patch("frigate.record.maintainer.chown_to_runtime"),
+        ]
+        for p in self.patches:
+            p.start()
+
+    def tearDown(self) -> None:
+        for p in self.patches:
+            p.stop()
+        self.tmp.cleanup()
+
+    async def _move(self) -> dict | None:
+        return await self.maintainer.move_segment(
+            "test_cam",
+            "main",
+            self.start_time,
+            self.end_time,
+            10.0,
+            self.cache_path,
+            MagicMock(),
+        )
+
+    def _destination(self) -> str:
+        return os.path.join(
+            self.record_dir, "2026-04-17", "15", "test_cam", "00.00.mp4"
+        )
+
+    async def test_successful_move_clears_end_time_cache(self):
+        async def fake_ffmpeg(*args, **kwargs):
+            # the destination is the last ffmpeg argument
+            with open(args[-1], "wb") as f:
+                f.write(b"\0" * 16)
+            proc = MagicMock()
+            proc.wait = AsyncMock(return_value=0)
+            proc.returncode = 0
+            return proc
+
+        with patch(
+            "frigate.record.maintainer.asyncio.create_subprocess_exec",
+            side_effect=fake_ffmpeg,
+        ):
+            result = await self._move()
+
+        self.assertIsNotNone(result)
+        self.assertTrue(os.path.exists(self._destination()))
+        self.assertFalse(os.path.exists(self.cache_path))
+        self.assertNotIn(self.cache_path, self.maintainer.end_time_cache)
+
+    async def test_existing_destination_drops_cache_file(self):
+        os.makedirs(os.path.dirname(self._destination()))
+        with open(self._destination(), "wb") as f:
+            f.write(b"\0" * 16)
+
+        with patch(
+            "frigate.record.maintainer.asyncio.create_subprocess_exec"
+        ) as ffmpeg:
+            result = await self._move()
+
+        self.assertIsNone(result)
+        ffmpeg.assert_not_called()
+        # the leftover cache file must not be re-listed on the next pass
+        self.assertFalse(os.path.exists(self.cache_path))
+        self.assertNotIn(self.cache_path, self.maintainer.end_time_cache)
 
 
 if __name__ == "__main__":
