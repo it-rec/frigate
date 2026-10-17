@@ -146,10 +146,16 @@ def get_vapid_pub_key(request: Request):
     """,
 )
 def register_notifications(request: Request, body: dict = None):
-    if request.app.frigate_config.auth.enabled:
-        # FIXME: For FastAPI the remote-user is not being populated
-        username = request.headers.get("remote-user") or "admin"
-    else:
+    # the remote-user header is set by the auth flow for authenticated users;
+    # internal (port 5000) requests are anonymous and requests made with auth
+    # disabled have no real user, so both are attributed to the admin user
+    username = request.headers.get("remote-user")
+
+    if (
+        not request.app.frigate_config.auth.enabled
+        or not username
+        or username == "anonymous"
+    ):
         username = "admin"
 
     json: dict[str, Any] = body or {}
