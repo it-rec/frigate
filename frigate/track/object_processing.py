@@ -307,6 +307,12 @@ class TrackedObjectProcessor(threading.Thread):
     def should_mqtt_snapshot(
         self, mqtt_config: CameraMqttConfig, obj: TrackedObject
     ) -> bool:
+        # not confirmed yet: its score history is still below the threshold.
+        # the snapshot topic is retained, so publishing it here would leave a
+        # discarded detection as the latest image for the label
+        if obj.false_positive:
+            return False
+
         # object never changed position
         if obj.is_stationary():
             return False
