@@ -101,6 +101,9 @@ class RecordingMaintainer(threading.Thread):
         self.object_recordings_info: dict[str, list] = defaultdict(list)
         self.audio_recordings_info: dict[str, list] = defaultdict(list)
         self.end_time_cache: dict[str, tuple[datetime.datetime, float]] = {}
+        # cache paths per camera that detection had already processed in the
+        # previous move_files pass
+        self.previously_processed_segments: dict[str, set[str]] = {}
         self.unexpected_cache_files_logged: bool = False
 
     async def move_files(self) -> None:
@@ -198,6 +201,7 @@ class RecordingMaintainer(threading.Thread):
 
         # delete all cached files past the most recent MAX_SEGMENTS_IN_CACHE
         keep_count = MAX_SEGMENTS_IN_CACHE
+        processed_segments: dict[str, set[str]] = {}
         for camera in grouped_recordings.keys():
             # sort based on start time
             grouped_recordings[camera] = sorted(
@@ -209,20 +213,22 @@ class RecordingMaintainer(threading.Thread):
                 camera_info[-1][0] if len(camera_info) > 0 else 0
             )
 
-            processed_segment_count = len(
-                list(
-                    filter(
-                        lambda r: (
-                            r["start_time"].timestamp()
-                            < most_recently_processed_frame_time
-                        ),
-                        grouped_recordings[camera],
-                    )
-                )
+            processed_paths = {
+                r["cache_path"]
+                for r in grouped_recordings[camera]
+                if r["start_time"].timestamp() < most_recently_processed_frame_time
+            }
+            processed_segment_count = len(processed_paths)
+
+            # only count segments the mover already had a pass to handle, when
+            # the detect stream recovers from a stall the frame time jumps and
+            # every segment cached during the stall becomes processed at once
+            stuck_segment_count = len(
+                processed_paths & self.previously_processed_segments.get(camera, set())
             )
 
             # see if the recording mover is too slow and segments need to be deleted
-            if processed_segment_count > keep_count:
+            if stuck_segment_count > keep_count:
                 logger.warning(
                     f"Unable to keep up with recording segments in cache for {camera}. Keeping the {keep_count} most recent segments out of {processed_segment_count} and discarding the rest..."
                 )
@@ -247,6 +253,12 @@ class RecordingMaintainer(threading.Thread):
                     Path(cache_path).unlink(missing_ok=True)
                     self.end_time_cache.pop(cache_path, None)
                 grouped_recordings[camera] = grouped_recordings[camera][-keep_count:]
+
+            processed_segments[camera] = processed_paths & {
+                r["cache_path"] for r in grouped_recordings[camera]
+            }
+
+        self.previously_processed_segments = processed_segments
 
         tasks = []
         for camera, recordings in grouped_recordings.items():
