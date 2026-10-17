@@ -188,9 +188,11 @@ def __post_process_multipart_yolo(
                     all_scores.append(conf)
                     all_class_ids.append(class_id)
 
-    indices = cv2.dnn.NMSBoxes(
+    # per-class NMS so overlapping objects of different classes are kept
+    indices = cv2.dnn.NMSBoxesBatched(
         bboxes=xyxy_to_xywh_for_nms(all_boxes),
         scores=all_scores,
+        class_ids=np.asarray(all_class_ids, dtype=np.int32),
         score_threshold=0.4,
         nms_threshold=0.4,
     )
@@ -235,9 +237,13 @@ def __post_process_nms_yolo(predictions: np.ndarray, width, height) -> np.ndarra
     boxes_xyxy[:, 3] = boxes[:, 1] + boxes[:, 3] / 2
     boxes = boxes_xyxy
 
-    # run NMS
-    indices = cv2.dnn.NMSBoxes(
-        xyxy_to_xywh_for_nms(boxes), scores, score_threshold=0.4, nms_threshold=0.4
+    # run per-class NMS so overlapping objects of different classes are kept
+    indices = cv2.dnn.NMSBoxesBatched(
+        xyxy_to_xywh_for_nms(boxes),
+        scores,
+        class_ids.astype(np.int32),
+        score_threshold=0.4,
+        nms_threshold=0.4,
     )
     detections = np.zeros((20, 6), np.float32)
     for i, (bbox, confidence, class_id) in enumerate(

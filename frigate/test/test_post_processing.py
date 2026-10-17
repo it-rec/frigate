@@ -11,6 +11,10 @@ A = (393, 499, 484, 620) and B = (527, 499, 618, 620) in a 640x640 input
 (43 px gap). Misread as [x, y, w, h] their IoU is 0.465, above the 0.4 NMS
 threshold, so the buggy format drops the lower scoring box while correct
 conversion keeps both.
+
+The YOLO decoders also run NMS per class: a heavily overlapping pair of
+different classes (a person on a bicycle, a car beside a truck) must both
+survive, while a same-class pair still collapses to one detection.
 """
 
 import math
@@ -38,6 +42,8 @@ B_CX, B_CY, B_W, B_H = 572.5, 559.5, 91.0, 121.0
 # expected normalized output rows: [class_id, conf, y1, x1, y2, x2]
 A_ROW = [499 / 640, 393 / 640, 620 / 640, 484 / 640]
 B_ROW = [499 / 640, 527 / 640, 620 / 640, 618 / 640]
+# box A shifted 4 px right: true IoU with A is 0.92
+A_SHIFTED_ROW = [499 / 640, 397 / 640, 620 / 640, 488 / 640]
 
 
 def kept(detections: np.ndarray) -> np.ndarray:
@@ -81,40 +87,93 @@ class TestYoloNmsPostProcess(unittest.TestCase):
         self.assertEqual(len(detections), 1)
         np.testing.assert_allclose(detections[0], [0, 0.90, *A_ROW], atol=2e-3)
 
+    def test_keeps_overlapping_objects_of_different_classes(self):
+        # same geometry as the duplicate case, but the second box is another
+        # class, e.g. a person on a bicycle; per-class NMS must keep both
+        output = self._single_output(
+            [
+                [A_CX, A_CY, A_W, A_H, 0.90, 0.0],
+                [A_CX + 4, A_CY, A_W, A_H, 0.0, 0.85],
+            ]
+        )
+
+        detections = kept(post_process_yolo(output, WIDTH, HEIGHT))
+
+        self.assertEqual(len(detections), 2)
+        np.testing.assert_allclose(detections[0], [0, 0.90, *A_ROW], atol=2e-3)
+        np.testing.assert_allclose(detections[1], [1, 0.85, *A_SHIFTED_ROW], atol=2e-3)
+
 
 class TestMultipartYoloPostProcess(unittest.TestCase):
-    def _multipart_output(self) -> list[np.ndarray]:
-        """Build a 3-scale anchor-based YOLO output containing boxes A and B,
-        both decoded through anchor 0 of the stride-32 scale."""
+    def _multipart_output(
+        self, boxes: list[tuple[float, float, float, float, float, int, int]]
+    ) -> list[np.ndarray]:
+        """Build a 3-scale anchor-based YOLO output from
+        (cx, cy, w, h, conf, class_id, anchor) tuples, each decoded through
+        the given anchor of the stride-32 scale."""
         outputs = [
             np.zeros((1, 255, 80, 80), dtype=np.float32),
             np.zeros((1, 255, 40, 40), dtype=np.float32),
             np.zeros((1, 255, 20, 20), dtype=np.float32),
         ]
-        stride, (anchor_w, anchor_h) = 32, (142, 110)
+        stride = 32
+        anchors = [(142, 110), (192, 243), (459, 401)]
 
-        for cx, cy, w, h, conf, class_channel in [
-            (A_CX, A_CY, A_W, A_H, 0.95, 5),  # class 0
-            (B_CX, B_CY, B_W, B_H, 0.90, 6),  # class 1
-        ]:
+        for cx, cy, w, h, conf, class_id, anchor in boxes:
+            anchor_w, anchor_h = anchors[anchor]
             cell_x, cell_y = int(cx // stride), int(cy // stride)
             dx = (cx / stride - cell_x + 0.5) / 2
             dy = (cy / stride - cell_y + 0.5) / 2
             dw = math.sqrt(w / anchor_w) / 2
             dh = math.sqrt(h / anchor_h) / 2
-            # anchor 0 occupies channels 0-84 of the 255 channel tensor
-            outputs[2][0, 0:4, cell_y, cell_x] = [dx, dy, dw, dh]
-            outputs[2][0, 4, cell_y, cell_x] = conf
-            outputs[2][0, class_channel, cell_y, cell_x] = 1.0
+            # each anchor occupies 85 consecutive channels of the 255
+            base = anchor * 85
+            outputs[2][0, base : base + 4, cell_y, cell_x] = [dx, dy, dw, dh]
+            outputs[2][0, base + 4, cell_y, cell_x] = conf
+            outputs[2][0, base + 5 + class_id, cell_y, cell_x] = 1.0
 
         return outputs
 
     def test_keeps_separated_objects_far_from_origin(self):
-        detections = kept(post_process_yolo(self._multipart_output(), WIDTH, HEIGHT))
+        output = self._multipart_output(
+            [
+                (A_CX, A_CY, A_W, A_H, 0.95, 0, 0),
+                (B_CX, B_CY, B_W, B_H, 0.90, 1, 0),
+            ]
+        )
+
+        detections = kept(post_process_yolo(output, WIDTH, HEIGHT))
 
         self.assertEqual(len(detections), 2)
         np.testing.assert_allclose(detections[0], [0, 0.95, *A_ROW], atol=2e-3)
         np.testing.assert_allclose(detections[1], [1, 0.90, *B_ROW], atol=2e-3)
+
+    def test_keeps_overlapping_objects_of_different_classes(self):
+        output = self._multipart_output(
+            [
+                (A_CX, A_CY, A_W, A_H, 0.95, 0, 0),
+                (A_CX + 4, A_CY, A_W, A_H, 0.90, 1, 1),
+            ]
+        )
+
+        detections = kept(post_process_yolo(output, WIDTH, HEIGHT))
+
+        self.assertEqual(len(detections), 2)
+        np.testing.assert_allclose(detections[0], [0, 0.95, *A_ROW], atol=2e-3)
+        np.testing.assert_allclose(detections[1], [1, 0.90, *A_SHIFTED_ROW], atol=2e-3)
+
+    def test_still_suppresses_same_class_duplicates(self):
+        output = self._multipart_output(
+            [
+                (A_CX, A_CY, A_W, A_H, 0.95, 0, 0),
+                (A_CX + 4, A_CY, A_W, A_H, 0.90, 0, 1),
+            ]
+        )
+
+        detections = kept(post_process_yolo(output, WIDTH, HEIGHT))
+
+        self.assertEqual(len(detections), 1)
+        np.testing.assert_allclose(detections[0], [0, 0.95, *A_ROW], atol=2e-3)
 
     def test_empty_output_returns_no_detections(self):
         outputs = [
