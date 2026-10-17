@@ -105,3 +105,15 @@ class TestHttpLatestFrame(BaseTestHttp):
             # Since we didn't provide camera-error.jpg, it might 500 if glob fails or return 500 if frame is None.
             assert response.status_code in [200, 500]
             assert "X-Frigate-Offline" not in response.headers
+
+    def test_birdseye_frame_not_available(self):
+        self.minimal_config["birdseye"] = {"enabled": True, "restream": True}
+        app = super().create_app()
+        app.detected_frames_processor = MagicMock()
+        # birdseye shared memory has not been written yet
+        app.detected_frames_processor.get_current_frame.return_value = None
+
+        with AuthTestClient(app) as client:
+            response = client.get("/birdseye/latest.jpg")
+            assert response.status_code == 404
+            assert response.json()["success"] is False
