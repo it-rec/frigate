@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, call, patch
 
 from frigate.config import FrigateConfig
+from frigate.config.camera.ffmpeg import CameraRoleEnum
 from frigate.const import STREAM_TYPE_MAIN, STREAM_TYPE_SUB
 from frigate.video.ffmpeg import CameraWatchdog
 
@@ -257,3 +258,84 @@ class TestCameraWatchdogStreamHealth(unittest.TestCase):
 
         assert watchdog.record_stale_threshold[STREAM_TYPE_MAIN] == 120
         assert watchdog.record_stale_threshold[STREAM_TYPE_SUB] == 150
+
+
+class TestCameraWatchdogExitedProcessRestart(unittest.TestCase):
+    def _build_exited_process(self, start_time: float) -> dict:
+        process = MagicMock()
+        process.poll.return_value = 1
+        return {
+            "cmd": ["ffmpeg"],
+            "roles": [CameraRoleEnum.record],
+            "logpipe": MagicMock(),
+            "process": process,
+            "start_time": start_time,
+        }
+
+    @patch("frigate.video.ffmpeg.start_or_restart_ffmpeg")
+    def test_long_running_process_is_restarted_immediately(self, mock_start):
+        watchdog = build_watchdog()
+        now = datetime.now().timestamp()
+        p = self._build_exited_process(now - 3600)
+
+        watchdog._restart_exited_process(p, now)
+
+        mock_start.assert_called_once()
+        assert p["process"] is mock_start.return_value
+        assert p["start_time"] == now
+        watchdog.requestor.send_data.assert_any_call(
+            "front_door/status/record", "offline"
+        )
+
+    @patch("frigate.video.ffmpeg.start_or_restart_ffmpeg")
+    def test_exited_process_waits_for_retry_interval(self, mock_start):
+        watchdog = build_watchdog()
+        now = datetime.now().timestamp()
+        p = self._build_exited_process(now - 3600)
+
+        watchdog._restart_exited_process(p, now)
+        assert mock_start.call_count == 1
+
+        # the restarted process exits right away again
+        for elapsed in range(1, int(watchdog.sleeptime)):
+            watchdog._restart_exited_process(p, now + elapsed)
+
+        assert mock_start.call_count == 1
+
+        watchdog._restart_exited_process(p, now + watchdog.sleeptime)
+        assert mock_start.call_count == 2
+
+    @patch("frigate.video.ffmpeg.start_or_restart_ffmpeg")
+    def test_exit_is_reported_once_while_waiting(self, mock_start):
+        watchdog = build_watchdog()
+        now = datetime.now().timestamp()
+        p = self._build_exited_process(now - 1)
+        p["roles"] = [CameraRoleEnum.audio]
+
+        for elapsed in range(0, int(watchdog.sleeptime) - 1):
+            watchdog._restart_exited_process(p, now + elapsed)
+
+        mock_start.assert_not_called()
+        offline_calls = [
+            c
+            for c in watchdog.requestor.send_data.call_args_list
+            if c.args == ("front_door/status/audio", "offline")
+        ]
+        assert len(offline_calls) == 1
+
+    @patch("frigate.video.ffmpeg.start_or_restart_ffmpeg")
+    def test_exited_process_restart_counts_as_reconnect(self, mock_start):
+        watchdog = build_watchdog()
+        now = datetime.now().timestamp()
+        p = self._build_exited_process(now - 3600)
+
+        watchdog._restart_exited_process(p, now)
+        watchdog._restart_exited_process(p, now + 1)
+
+        assert len(watchdog.reconnect_timestamps) == 1
+        assert watchdog.reconnects.value == 1
+
+        watchdog._restart_exited_process(p, now + watchdog.sleeptime)
+
+        assert len(watchdog.reconnect_timestamps) == 2
+        assert watchdog.reconnects.value == 2
