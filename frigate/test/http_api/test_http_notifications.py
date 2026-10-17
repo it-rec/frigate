@@ -57,3 +57,44 @@ class TestNotificationRegistration(BaseTestHttp):
         assert admin.password_hash.count("$") == 3
         assert admin.notification_tokens == [SUBSCRIPTION]
         assert config.auth.admin_first_time_login is True
+
+
+class TestNotificationRegistrationUser(BaseTestHttp):
+    """Attribution of subscriptions to users when auth is enabled."""
+
+    def setUp(self):
+        super().setUp([User])
+        self.minimal_config["auth"] = {"enabled": True}
+
+        for username, role in (("admin", "admin"), ("viewer", "viewer")):
+            User.insert(
+                username=username,
+                role=role,
+                password_hash="x$1$y$z",
+                notification_tokens=[],
+            ).execute()
+
+    def _register(self, username: str, role: str):
+        with AuthTestClient(self.create_app()) as client:
+            return client.post(
+                "/notifications/register",
+                json={"sub": SUBSCRIPTION},
+                headers={"remote-user": username, "remote-role": role},
+            )
+
+    def test_authenticated_user_receives_token(self):
+        assert self._register("viewer", "viewer").status_code == 200
+        assert User.get_by_id("viewer").notification_tokens == [SUBSCRIPTION]
+        assert User.get_by_id("admin").notification_tokens == []
+
+    def test_internal_port_request_attributed_to_admin(self):
+        # requests on the internal port pass /auth as remote-user "anonymous"
+        assert self._register("anonymous", "admin").status_code == 200
+        assert User.get_by_id("admin").notification_tokens == [SUBSCRIPTION]
+
+    def test_unknown_user_returns_404(self):
+        response = self._register("ghost", "viewer")
+
+        assert response.status_code == 404
+        assert response.json()["success"] is False
+        assert User.get_by_id("admin").notification_tokens == []
