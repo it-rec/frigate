@@ -61,6 +61,13 @@ export const VirtualizedEventSegments = forwardRef<
     const [visibleRange, setVisibleRange] = useState({ start: 0, end: 0 });
     const containerRef = useRef<HTMLDivElement>(null);
 
+    // Mirror visibleRange into a ref so scrollToSegment can read the latest
+    // range without listing visibleRange as a dependency. That keeps its
+    // identity stable across scroll frames, which lets the memoized
+    // EventSegment children skip re-rendering while scrolling.
+    const visibleRangeRef = useRef(visibleRange);
+    visibleRangeRef.current = visibleRange;
+
     const updateVisibleRange = useCallback(() => {
       if (timelineRef.current) {
         const { scrollTop, clientHeight } = timelineRef.current;
@@ -119,8 +126,8 @@ export const VirtualizedEventSegments = forwardRef<
             targetScrollTop - timelineHeight / 2 + SEGMENT_HEIGHT / 2;
 
           const isVisible =
-            segmentIndex > visibleRange.start + OVERSCAN_COUNT &&
-            segmentIndex < visibleRange.end - OVERSCAN_COUNT;
+            segmentIndex > visibleRangeRef.current.start + OVERSCAN_COUNT &&
+            segmentIndex < visibleRangeRef.current.end - OVERSCAN_COUNT;
 
           if (!ifNeeded || !isVisible) {
             timelineRef.current.scrollTo({
@@ -131,13 +138,7 @@ export const VirtualizedEventSegments = forwardRef<
           updateVisibleRange();
         }
       },
-      [
-        segments,
-        alignStartDateToTimeline,
-        updateVisibleRange,
-        timelineRef,
-        visibleRange,
-      ],
+      [segments, alignStartDateToTimeline, updateVisibleRange, timelineRef],
     );
 
     useImperativeHandle(ref, () => ({
